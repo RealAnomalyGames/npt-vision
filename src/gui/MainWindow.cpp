@@ -1,4 +1,4 @@
-#include "../gui/MainWindow.h"
+#include "MainWindow.h"
 
 #include <QAction>
 #include <QColor>
