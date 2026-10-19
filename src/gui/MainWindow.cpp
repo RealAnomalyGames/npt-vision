@@ -8,87 +8,212 @@
 #include <QStyle>
 #include <QAction>
 #include <QColor>
+#include <QColorDialog>
+#include <QImage>
 #include <QDockWidget>
 #include <QFile>
+#include <QMouseEvent>
 #include <QHeaderView>
 #include <QListWidget>
 #include <QMenu>
+#include <QPen>
+#include <QPixmap>
 #include <QMenuBar>
 #include <QPainter>
 #include <QStatusBar>
 #include <QTableWidget>
 #include <QVBoxLayout>
 #include <QWidget>
+#include <QIcon>
+#include <QSize>
 
 namespace
 {
 class CanvasWidget final : public QWidget
 {
 public:
-    explicit CanvasWidget(QWidget* parent = nullptr)
-        : QWidget(parent)
+    enum class Tool
     {
-        setMinimumSize(400, 300);
-        setAutoFillBackground(true);
+        Pencil,
+        Eraser
+    };
 
-        QPalette colors = palette();
-        colors.setColor(QPalette::Window, QColor("#303238"));
-        setPalette(colors);
+    explicit CanvasWidget(QWidget* parent = nullptr)
+        : QWidget(parent),
+          drawing_(640, 360, QImage::Format_ARGB32_Premultiplied)
+    {
+        drawing_.fill(Qt::transparent);
+
+        setMinimumSize(400, 300);
+        setMouseTracking(true);
+        setAutoFillBackground(false);
+    }
+
+    void setTool(Tool tool)
+    {
+        tool_ = tool;
+        update();
+    }
+
+    void setDrawingColor(const QColor& color)
+    {
+        color_ = color;
+    }
+
+    QColor drawingColor() const
+    {
+        return color_;
     }
 
 protected:
     void paintEvent(QPaintEvent*) override
     {
         QPainter painter(this);
-        painter.setRenderHint(QPainter::Antialiasing, false);
-
         painter.fillRect(rect(), QColor("#303238"));
 
-        // Draw a centered white animation canvas.
-        const int canvasWidth = qMin(640, width() - 48);
-        const int canvasHeight = qMin(360, height() - 48);
+        const QRect canvas = canvasRect();
 
-        if (canvasWidth <= 0 || canvasHeight <= 0)
+        if (canvas.width() <= 0 || canvas.height() <= 0)
             return;
-
-        const QRect canvas(
-            (width() - canvasWidth) / 2,
-            (height() - canvasHeight) / 2,
-            canvasWidth,
-            canvasHeight
-        );
 
         painter.fillRect(canvas, Qt::white);
 
-        painter.setPen(QPen(QColor("#d8d8d8"), 1));
+        // Subtle grid, matching the existing canvas appearance.
+        painter.save();
+        painter.setClipRect(canvas);
+        painter.setPen(QPen(QColor("#e4e4e4"), 1));
 
         constexpr int gridSize = 24;
 
         for (int x = canvas.left() + gridSize;
-             x < canvas.right();
-             x += gridSize)
+             x < canvas.right(); x += gridSize)
         {
             painter.drawLine(x, canvas.top(), x, canvas.bottom());
         }
 
         for (int y = canvas.top() + gridSize;
-             y < canvas.bottom();
-             y += gridSize)
+             y < canvas.bottom(); y += gridSize)
         {
             painter.drawLine(canvas.left(), y, canvas.right(), y);
         }
 
-        painter.setPen(QPen(QColor("#8c8c8c"), 1));
-        painter.drawRect(canvas);
+        painter.restore();
 
-        painter.setPen(QColor("#777777"));
-        painter.drawText(
-            canvas,
-            Qt::AlignCenter,
-            "NPT Vision - Drawing Canvas\n\n"
-            "Drawing tools are coming soon."
+        // Draw the artwork over the background grid.
+        painter.setRenderHint(QPainter::SmoothPixmapTransform, false);
+        painter.drawImage(canvas, drawing_);
+
+        painter.setPen(QPen(QColor("#808080"), 1));
+        painter.drawRect(canvas);
+    }
+
+    void mousePressEvent(QMouseEvent* event) override
+    {
+        if (event->button() != Qt::LeftButton)
+            return;
+
+        const QPoint point = toDrawingPoint(event->position().toPoint());
+
+        if (!QRect(QPoint(0, 0), drawing_.size()).contains(point))
+            return;
+
+        drawing_ = drawing_.copy();
+        lastPoint_ = point;
+        drawingInProgress_ = true;
+
+        drawTo(point);
+        update();
+    }
+
+    void mouseMoveEvent(QMouseEvent* event) override
+    {
+        if (!drawingInProgress_ ||
+            !(event->buttons() & Qt::LeftButton))
+        {
+            return;
+        }
+
+        drawTo(toDrawingPoint(event->position().toPoint()));
+        update();
+    }
+
+    void mouseReleaseEvent(QMouseEvent* event) override
+    {
+        if (event->button() == Qt::LeftButton)
+            drawingInProgress_ = false;
+    }
+
+private:
+    QRect canvasRect() const
+    {
+        const int canvasWidth = qMin(640, width() - 48);
+        const int canvasHeight = qMin(360, height() - 48);
+
+        if (canvasWidth <= 0 || canvasHeight <= 0)
+            return {};
+
+        return QRect(
+            (width() - canvasWidth) / 2,
+            (height() - canvasHeight) / 2,
+            canvasWidth,
+            canvasHeight
         );
     }
+
+    QPoint toDrawingPoint(const QPoint& point) const
+    {
+        const QRect canvas = canvasRect();
+
+        if (canvas.width() <= 0 || canvas.height() <= 0)
+            return QPoint(-1, -1);
+
+        return QPoint(
+            (point.x() - canvas.left()) * drawing_.width()
+                / canvas.width(),
+            (point.y() - canvas.top()) * drawing_.height()
+                / canvas.height()
+        );
+    }
+
+    void drawTo(const QPoint& point)
+    {
+        const QRect bounds(QPoint(0, 0), drawing_.size());
+
+        if (!bounds.contains(point))
+        {
+            lastPoint_ = point;
+            return;
+        }
+
+        QPainter painter(&drawing_);
+        painter.setRenderHint(QPainter::Antialiasing, false);
+
+        if (tool_ == Tool::Eraser)
+        {
+            painter.setCompositionMode(QPainter::CompositionMode_Clear);
+        }
+        else
+        {
+            painter.setCompositionMode(QPainter::CompositionMode_SourceOver);
+            painter.setPen(QPen(color_, 3, Qt::SolidLine,
+                                Qt::RoundCap, Qt::RoundJoin));
+        }
+
+        if (tool_ == Tool::Eraser)
+        {
+            painter.setPen(QPen(Qt::transparent, 12, Qt::SolidLine,
+                                Qt::RoundCap, Qt::RoundJoin));
+        }
+
+        painter.drawLine(lastPoint_, point);
+        lastPoint_ = point;
+    }
+
+    QImage drawing_;
+    QColor color_ = Qt::black;
+    Tool tool_ = Tool::Pencil;
+    QPoint lastPoint_;
+    bool drawingInProgress_ = false;
 };
 
 QDockWidget* makeDock(
@@ -181,6 +306,11 @@ MainWindow::MainWindow(QWidget* parent)
             text-align: left;
         }
 
+        QDockWidget::title:!active {
+            background-color: #000080;
+            color: #ffffff;
+        }
+
         QTableWidget, QListWidget {
             background-color: #ffffff;
             color: #000000;
@@ -201,16 +331,17 @@ MainWindow::MainWindow(QWidget* parent)
         }
     )");
 
-    auto* canvas = new CanvasWidget(this);
-    setCentralWidget(canvas);
+    canvasWidget_ = new CanvasWidget(this);
+    setCentralWidget(canvasWidget_);
+
+    toolStatusLabel_ = new QLabel("Tool: Pencil", this);
+    statusBar()->addPermanentWidget(toolStatusLabel_);
 
     createMenus();
     createToolBar();
     createTimeline();
     createLayersPanel();
 
-    toolStatusLabel_ = new QLabel("Tool: Pencil", this);
-    statusBar()->addPermanentWidget(toolStatusLabel_);
     statusBar()->showMessage("Ready | NPT Vision 0.1.0");
 }
 
@@ -293,6 +424,54 @@ void MainWindow::createMenus()
     });
 }
 
+namespace
+{
+QIcon makeToolIcon(const QString& name, const QColor& color = Qt::black)
+{
+    QPixmap pixmap(20, 20);
+    pixmap.fill(Qt::transparent);
+
+    QPainter painter(&pixmap);
+    painter.setRenderHint(QPainter::Antialiasing, false);
+
+    if (name == "Pencil")
+    {
+        painter.setPen(QPen(QColor("#404040"), 1));
+        painter.setBrush(QColor("#f4d35e"));
+        painter.drawPolygon(QPolygon({
+            QPoint(4, 15), QPoint(14, 5),
+            QPoint(17, 8), QPoint(7, 18)
+        }));
+
+        painter.setPen(QPen(QColor("#404040"), 1));
+        painter.drawLine(4, 15, 3, 18);
+        painter.drawLine(3, 18, 7, 18);
+    }
+    else if (name == "Eraser")
+    {
+        painter.setPen(QPen(QColor("#404040"), 1));
+        painter.setBrush(QColor("#f0a0a0"));
+        painter.drawPolygon(QPolygon({
+            QPoint(3, 12), QPoint(11, 4),
+            QPoint(18, 11), QPoint(12, 17),
+            QPoint(7, 17)
+        }));
+        painter.setPen(QPen(Qt::white, 1));
+        painter.drawLine(7, 17, 12, 11);
+    }
+    else if (name == "Color")
+    {
+        painter.setPen(QPen(QColor("#404040"), 1));
+        painter.setBrush(color);
+        painter.drawRect(3, 3, 14, 14);
+        painter.setPen(QPen(Qt::white, 1));
+        painter.drawLine(5, 14, 14, 5);
+    }
+
+    return QIcon(pixmap);
+}
+}
+
 void MainWindow::createToolBar()
 {
     auto* toolbar = new QToolBar("Drawing Tools", this);
@@ -300,60 +479,61 @@ void MainWindow::createToolBar()
     toolbar->setMovable(false);
     toolbar->setFloatable(false);
     toolbar->setOrientation(Qt::Vertical);
-    toolbar->setToolButtonStyle(Qt::ToolButtonTextOnly);
-    toolbar->setIconSize(QSize(16, 16));
+    toolbar->setToolButtonStyle(Qt::ToolButtonTextUnderIcon);
+    toolbar->setIconSize(QSize(20, 20));
 
     toolGroup_ = new QActionGroup(this);
     toolGroup_->setExclusive(true);
 
-    struct ToolDefinition
-    {
-        const char* name;
-        const char* description;
-    };
+    auto* pencil = toolbar->addAction(makeToolIcon("Pencil"), "Pencil");
+    pencil->setCheckable(true);
+    pencil->setChecked(true);
+    pencil->setToolTip("Draw using the selected color");
 
-    const ToolDefinition tools[] = {
-        {"Pencil", "Draw on the canvas"},
-        {"Eraser", "Erase from the canvas"},
-        {"Fill", "Fill a connected area"},
-        {"Eyedropper", "Pick a color from the canvas"}
-    };
+    auto* eraser = toolbar->addAction(makeToolIcon("Eraser"), "Eraser");
+    eraser->setCheckable(true);
+    eraser->setToolTip("Erase artwork");
 
-    for (const auto& tool : tools)
-    {
-        auto* action = toolbar->addAction(
-            QString::fromLatin1(tool.name)
-        );
+    toolGroup_->addAction(pencil);
+    toolGroup_->addAction(eraser);
 
-        action->setCheckable(true);
-        action->setToolTip(
-            QString::fromLatin1(tool.description)
-        );
-
-        toolGroup_->addAction(action);
-
-        if (QString::fromLatin1(tool.name) == "Pencil")
-            action->setChecked(true);
-    }
-
-    connect(
-        toolGroup_,
-        &QActionGroup::triggered,
-        this,
-        [this](QAction* action)
-        {
-            const QString toolName = action->text();
-
-            if (toolStatusLabel_)
-                toolStatusLabel_->setText(
-                    "Tool: " + toolName
-                );
-
-            statusBar()->showMessage(
-                toolName + " selected"
-            );
-        }
+    auto* colorAction = toolbar->addAction(
+        makeToolIcon("Color", canvasWidget_->drawingColor()),
+        "Color..."
     );
+    colorAction->setToolTip("Choose the pencil color");
+
+    connect(pencil, &QAction::triggered, this, [this]()
+    {
+        canvasWidget_->setTool(CanvasWidget::Tool::Pencil);
+        toolStatusLabel_->setText("Tool: Pencil");
+        statusBar()->showMessage("Pencil selected");
+    });
+
+    connect(eraser, &QAction::triggered, this, [this]()
+    {
+        canvasWidget_->setTool(CanvasWidget::Tool::Eraser);
+        toolStatusLabel_->setText("Tool: Eraser");
+        statusBar()->showMessage("Eraser selected");
+    });
+
+    connect(colorAction, &QAction::triggered, this, [this, colorAction]()
+    {
+        const QColor chosen = QColorDialog::getColor(
+            canvasWidget_->drawingColor(),
+            this,
+            "Choose Drawing Color"
+        );
+
+        if (!chosen.isValid())
+            return;
+
+        canvasWidget_->setDrawingColor(chosen);
+        colorAction->setIcon(makeToolIcon("Color", chosen));
+        statusBar()->showMessage(
+            QString("Drawing color: %1").arg(chosen.name())
+        );
+    });
 
     addToolBar(Qt::LeftToolBarArea, toolbar);
 }
