@@ -15,7 +15,6 @@ set(CMAKE_AUTORCC ON)
 
 find_package(Qt6 6.8 REQUIRED COMPONENTS
     Widgets
-    Svg
 )
 
 qt_standard_project_setup()
@@ -28,7 +27,6 @@ qt_add_executable(NPTVision
 
 target_link_libraries(NPTVision PRIVATE
     Qt6::Widgets
-    Qt6::Svg
 )
 
 if(WIN32)
