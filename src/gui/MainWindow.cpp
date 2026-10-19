@@ -1,11 +1,16 @@
 #include "MainWindow.h"
 
+#include <QActionGroup>
+#include <QApplication>
+#include <QLabel>
+#include <QToolBar>
+#include <QToolButton>
+#include <QStyle>
 #include <QAction>
 #include <QColor>
 #include <QDockWidget>
 #include <QFile>
 #include <QHeaderView>
-#include <QLabel>
 #include <QListWidget>
 #include <QMenu>
 #include <QMenuBar>
@@ -107,16 +112,106 @@ MainWindow::MainWindow(QWidget* parent)
     resize(1100, 720);
     setMinimumSize(800, 500);
 
+    qApp->setStyleSheet(R"(
+        QMainWindow, QWidget {
+            background-color: #c0c0c0;
+            color: #000000;
+        }
+
+        QMenuBar {
+            background-color: #c0c0c0;
+            border-bottom: 1px solid #808080;
+        }
+
+        QMenuBar::item {
+            padding: 4px 8px;
+            background: transparent;
+        }
+
+        QMenuBar::item:selected {
+            background-color: #000080;
+            color: #ffffff;
+        }
+
+        QMenu {
+            background-color: #c0c0c0;
+            border: 1px solid #000000;
+        }
+
+        QMenu::item {
+            padding: 4px 24px 4px 20px;
+        }
+
+        QMenu::item:selected {
+            background-color: #000080;
+            color: #ffffff;
+        }
+
+        QToolBar {
+            background-color: #c0c0c0;
+            border: none;
+            spacing: 3px;
+            padding: 4px;
+        }
+
+        QToolButton {
+            background-color: #c0c0c0;
+            border-top: 2px solid #ffffff;
+            border-left: 2px solid #ffffff;
+            border-right: 2px solid #404040;
+            border-bottom: 2px solid #404040;
+            padding: 5px;
+            min-width: 62px;
+            min-height: 28px;
+        }
+
+        QToolButton:pressed,
+        QToolButton:checked {
+            border-top: 2px solid #404040;
+            border-left: 2px solid #404040;
+            border-right: 2px solid #ffffff;
+            border-bottom: 2px solid #ffffff;
+            background-color: #b0b0b0;
+        }
+
+        QDockWidget::title {
+            background-color: #000080;
+            color: #ffffff;
+            padding: 4px;
+            text-align: left;
+        }
+
+        QTableWidget, QListWidget {
+            background-color: #ffffff;
+            color: #000000;
+            border-top: 2px solid #404040;
+            border-left: 2px solid #404040;
+            border-right: 2px solid #ffffff;
+            border-bottom: 2px solid #ffffff;
+            gridline-color: #808080;
+        }
+
+        QStatusBar {
+            background-color: #c0c0c0;
+            border-top: 1px solid #808080;
+        }
+
+        QStatusBar::item {
+            border: none;
+        }
+    )");
+
     auto* canvas = new CanvasWidget(this);
     setCentralWidget(canvas);
 
     createMenus();
+    createToolBar();
     createTimeline();
     createLayersPanel();
 
-    statusBar()->showMessage(
-        "Ready | NPT Vision 0.1.0"
-    );
+    toolStatusLabel_ = new QLabel("Tool: Pencil", this);
+    statusBar()->addPermanentWidget(toolStatusLabel_);
+    statusBar()->showMessage("Ready | NPT Vision 0.1.0");
 }
 
 void MainWindow::createMenus()
@@ -196,6 +291,71 @@ void MainWindow::createMenus()
         if (QDockWidget* dock = findChild<QDockWidget*>("Layers"))
             dock->setVisible(visible);
     });
+}
+
+void MainWindow::createToolBar()
+{
+    auto* toolbar = new QToolBar("Drawing Tools", this);
+    toolbar->setObjectName("DrawingTools");
+    toolbar->setMovable(false);
+    toolbar->setFloatable(false);
+    toolbar->setOrientation(Qt::Vertical);
+    toolbar->setToolButtonStyle(Qt::ToolButtonTextOnly);
+    toolbar->setIconSize(QSize(16, 16));
+
+    toolGroup_ = new QActionGroup(this);
+    toolGroup_->setExclusive(true);
+
+    struct ToolDefinition
+    {
+        const char* name;
+        const char* description;
+    };
+
+    const ToolDefinition tools[] = {
+        {"Pencil", "Draw on the canvas"},
+        {"Eraser", "Erase from the canvas"},
+        {"Fill", "Fill a connected area"},
+        {"Eyedropper", "Pick a color from the canvas"}
+    };
+
+    for (const auto& tool : tools)
+    {
+        auto* action = toolbar->addAction(
+            QString::fromLatin1(tool.name)
+        );
+
+        action->setCheckable(true);
+        action->setToolTip(
+            QString::fromLatin1(tool.description)
+        );
+
+        toolGroup_->addAction(action);
+
+        if (QString::fromLatin1(tool.name) == "Pencil")
+            action->setChecked(true);
+    }
+
+    connect(
+        toolGroup_,
+        &QActionGroup::triggered,
+        this,
+        [this](QAction* action)
+        {
+            const QString toolName = action->text();
+
+            if (toolStatusLabel_)
+                toolStatusLabel_->setText(
+                    "Tool: " + toolName
+                );
+
+            statusBar()->showMessage(
+                toolName + " selected"
+            );
+        }
+    );
+
+    addToolBar(Qt::LeftToolBarArea, toolbar);
 }
 
 void MainWindow::createTimeline()
