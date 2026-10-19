@@ -4,6 +4,8 @@
 
 class QActionGroup;
 class QLabel;
+class QWidget;
+class CanvasWidget;
 
 class MainWindow final : public QMainWindow
 {
@@ -18,6 +20,7 @@ private:
     void createTimeline();
     void createLayersPanel();
 
+    CanvasWidget* canvasWidget_ = nullptr;
     QActionGroup* toolGroup_ = nullptr;
     QLabel* toolStatusLabel_ = nullptr;
 };
