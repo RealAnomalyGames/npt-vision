@@ -226,6 +226,28 @@ QDockWidget* makeDock(
     dock->setWidget(content);
     dock->setMinimumWidth(160);
 
+    auto* titleBar = new QWidget(dock);
+    titleBar->setFixedHeight(24);
+    titleBar->setStyleSheet(
+        "background-color: #000080;"
+    );
+
+    auto* layout = new QHBoxLayout(titleBar);
+    layout->setContentsMargins(6, 0, 4, 0);
+    layout->setSpacing(4);
+
+    auto* label = new QLabel(title, titleBar);
+    label->setStyleSheet(
+        "color: #ffffff;"
+        "background-color: transparent;"
+        "font-weight: bold;"
+    );
+
+    layout->addWidget(label);
+    layout->addStretch();
+
+    dock->setTitleBarWidget(titleBar);
+
     return dock;
 }
 }
