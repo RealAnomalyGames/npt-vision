@@ -1,0 +1,25 @@
+# CMake build output
+build/
+cmake-build-*/
+
+# Visual Studio
+.vs/
+*.sln
+*.vcxproj
+*.vcxproj.user
+*.pdb
+*.ilk
+*.obj
+*.exe
+*.dll
+*.lib
+
+# Qt Creator
+CMakeLists.txt.user*
+.qtcreator/
+
+# Temporary and operating system files
+*.tmp
+*.log
+Thumbs.db
+.DS_Store
