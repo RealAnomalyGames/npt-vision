@@ -27,8 +27,6 @@
 #include <QIcon>
 #include <QSize>
 
-namespace
-{
 class CanvasWidget final : public QWidget
 {
 public:
@@ -216,6 +214,8 @@ private:
     bool drawingInProgress_ = false;
 };
 
+namespace
+{
 QDockWidget* makeDock(
     const QString& title,
     QWidget* content,
