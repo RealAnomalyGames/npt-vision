@@ -1,6 +1,6 @@
 # NPT Vision
 
-**NPT Vision** is a 2D animation editor developed by NPT Software.
+**NPT Vision** is a 2D animation editor developed by Neptune Corporation™ for its NPT Professional lineup.
 
 The project aims to provide a lightweight desktop animation workflow with a traditional interface, frame-based timeline, layers, drawing tools, and image import support.
 
@@ -58,7 +58,7 @@ Bug reports, feature suggestions, and contributions are welcome through GitHub I
 
 ## Developer
 
-NPT Software
+Neptune Corporation
 
 ## License
 
