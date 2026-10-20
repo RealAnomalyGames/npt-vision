@@ -489,7 +489,7 @@ MainWindow::MainWindow(QWidget* parent)
     toolStatusLabel_ = new QLabel("Tool: Pencil", this);
     statusBar()->addPermanentWidget(toolStatusLabel_);
 
-    Menus();
+    createMenus();
     createToolBar();
     createTimeline();
     createLayersPanel();
@@ -497,7 +497,7 @@ MainWindow::MainWindow(QWidget* parent)
     statusBar()->showMessage("Ready | NPT Vision 0.1.0");
 }
 
-void MainWindow::Menus()
+void MainWindow::createMenus()
 {
     QMenu* fileMenu = menuBar()->addMenu("&File");
     QMenu* editMenu = menuBar()->addMenu("&Edit");
@@ -562,7 +562,7 @@ void MainWindow::Menus()
         );
     });
 
-    // The dock widgets are connected after they are d.
+    // Connect the menu actions to the dock widgets.
     connect(timelineAction, &QAction::triggered, this, [this](bool visible)
     {
         if (QDockWidget* dock = findChild<QDockWidget*>("Timeline"))
