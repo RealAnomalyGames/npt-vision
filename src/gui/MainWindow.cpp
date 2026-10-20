@@ -350,6 +350,9 @@ protected:
         update();
     }
 
+signals:
+        void historyChanged();
+
 private:
     static std::shared_ptr<QImage> makeBlankImage()
     {
@@ -427,9 +430,6 @@ private:
 
     connect(canvasWidget_, &CanvasWidget::historyChanged,
         this, &MainWindow::updateUndoRedoActions);
-
-    signals:
-        void historyChanged();
 
     std::vector<HistoryEntry> undoStack_;
     std::vector<HistoryEntry> redoStack_;
