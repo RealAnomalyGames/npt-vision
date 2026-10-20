@@ -490,9 +490,9 @@ MainWindow::MainWindow(QWidget* parent)
     statusBar()->addPermanentWidget(toolStatusLabel_);
 
     Menus();
-    ToolBar();
-    Timeline();
-    LayersPanel();
+    createToolBar();
+    createTimeline();
+    createLayersPanel();
 
     statusBar()->showMessage("Ready | NPT Vision 0.1.0");
 }
