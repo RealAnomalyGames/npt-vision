@@ -289,51 +289,44 @@ protected:
         if (event->button() != Qt::LeftButton)
             return;
 
-        const QRect canvas = canvasRect();
-        if (!canvas.contains(event->position().toPoint()))
+        const QPoint point = toDrawingPoint(event->position().toPoint());
+
+        if (point.x() < 0 || point.y() < 0 ||
+            point.x() >= DrawingWidth || point.y() >= DrawingHeight)
             return;
-    
-        lastPoint_ = toDrawingPoint(event->position().toPoint());
 
-        auto& image =
-            layers_[currentLayer_].cels[currentFrame_].image;
-
-        // Preserve the exact original pointer, including held cels.
-        strokeBefore_ = image;
-
+        lastPoint_ = point;
         drawingInProgress_ = true;
 
-        drawTo(lastPoint_);
+        // Save the original image before this stroke begins.
+        strokeBefore_ = layers_[currentLayer_].cels[currentFrame_].image;
+
+        drawTo(point);
         update();
     }
 
     void mouseReleaseEvent(QMouseEvent* event) override
     {
-        if (event->button() != Qt::LeftButton ||
-            !drawingInProgress_)
+        if (event->button() != Qt::LeftButton || !drawingInProgress_)
             return;
-    
+
         drawingInProgress_ = false;
 
-        if (strokeBefore_)
+        auto after = layers_[currentLayer_].cels[currentFrame_].image;
+
+        if (strokeBefore_ && after != strokeBefore_)
         {
-            auto after =
-                layers_[currentLayer_].cels[currentFrame_].image;
+            undoStack_.push_back({
+                currentLayer_,
+                currentFrame_,
+                strokeBefore_,
+                after
+            });
 
-            if (after != strokeBefore_)
-            {
-                undoStack_.push_back({
-                    currentLayer_,
-                    currentFrame_,
-                    strokeBefore_,
-                    after
-                });
-
-                redoStack_.clear();
-            }
-
-            strokeBefore_.reset();
+            redoStack_.clear();
         }
+
+        strokeBefore_.reset();
 
         update();
     }
