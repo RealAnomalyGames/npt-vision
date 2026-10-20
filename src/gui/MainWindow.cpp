@@ -35,6 +35,7 @@
 
 #include <memory>
 #include <vector>
+#include <functional>
 
 class CanvasWidget final : public QWidget
 {
@@ -239,6 +240,11 @@ public:
         strokeBefore_.reset();
     }
 
+    void setHistoryChangedCallback(std::function<void()> callback)
+    {
+        historyChangedCallback_ = std::move(callback);
+    }
+
     void setTool(Tool tool) { tool_ = tool; }
     void setDrawingColor(const QColor& color) { color_ = color; }
     QColor drawingColor() const { return color_; }
@@ -325,6 +331,9 @@ protected:
 
             redoStack_.clear();
         }
+
+        if (historyChangedCallback_)
+            historyChangedCallback_();
 
         strokeBefore_.reset();
 
@@ -416,6 +425,7 @@ private:
         std::shared_ptr<QImage> after;
     };
 
+    std::function<void()> historyChangedCallback_;
     std::vector<HistoryEntry> undoStack_;
     std::vector<HistoryEntry> redoStack_;
     std::shared_ptr<QImage> strokeBefore_;
@@ -570,6 +580,9 @@ MainWindow::MainWindow(QWidget* parent)
     )");
 
     canvasWidget_ = new CanvasWidget(this);
+    canvasWidget_->setHistoryChangedCallback([this]() {
+        updateUndoRedoActions();
+    });
     setCentralWidget(canvasWidget_);
 
     toolStatusLabel_ = new QLabel("Tool: Pencil", this);
@@ -1064,8 +1077,11 @@ void MainWindow::redo()
 
 void MainWindow::updateUndoRedoActions()
 {
-    undoAction_->setEnabled(canvasWidget_->canUndo());
-    redoAction_->setEnabled(canvasWidget_->canRedo());
+    if (undoAction_)
+        undoAction_->setEnabled(canvasWidget_->canUndo());
+
+    if (redoAction_)
+        redoAction_->setEnabled(canvasWidget_->canRedo());
 }
 
 void MainWindow::togglePlayback()
