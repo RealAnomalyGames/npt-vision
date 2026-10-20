@@ -31,6 +31,7 @@
 #include <QSize>
 #include <QPushButton>
 #include <QSignalBlocker>
+#include <QSpinBox>
 
 #include <memory>
 #include <vector>
@@ -141,6 +142,46 @@ public:
         return layers_[layerIndex].cels[frameIndex].image.use_count() > 1;
     }
 
+    bool canUndo() const
+    {
+        return !undoStack_.empty();
+    }
+
+    bool canRedo() const
+    {
+        return !redoStack_.empty();
+    }
+
+    void undo()
+    {
+        if (undoStack_.empty())
+            return;
+
+        HistoryEntry entry = undoStack_.back();
+        undoStack_.pop_back();
+
+        layers_[entry.layerIndex].cels[entry.frameIndex].image =
+            entry.before;
+    
+        redoStack_.push_back(entry);
+        update();
+    }
+
+    void redo()
+    {
+        if (redoStack_.empty())
+            return;
+
+        HistoryEntry entry = redoStack_.back();
+        redoStack_.pop_back();
+
+        layers_[entry.layerIndex].cels[entry.frameIndex].image =
+            entry.after;
+
+        undoStack_.push_back(entry);
+        update();
+    }
+
     void addLayer(const QString& name = {})
     {
         Layer layer;
@@ -247,6 +288,30 @@ protected:
 
         lastPoint_ = toDrawingPoint(event->position().toPoint());
         drawingInProgress_ = true;
+        
+        strokeBefore_ =
+            layers_[currentLayer_].cels[currentFrame_].image;
+
+        if (strokeBefore_)
+        {
+            auto after =
+                layers_[currentLayer_].cels[currentFrame_].image;
+
+            if (after != strokeBefore_)
+            {
+                undoStack_.push_back({
+                    currentLayer_,
+                    currentFrame_,
+                    strokeBefore_,
+                    after
+                });
+
+                redoStack_.clear();
+            }
+
+            strokeBefore_.reset();
+        }
+        
         drawTo(lastPoint_);
         update();
     }
@@ -333,6 +398,18 @@ private:
         painter.drawLine(lastPoint_, point);
         lastPoint_ = point;
     }
+
+    struct HistoryEntry
+    {
+        int layerIndex;
+        int frameIndex;
+        std::shared_ptr<QImage> before;
+        std::shared_ptr<QImage> after;
+    };
+
+    std::vector<HistoryEntry> undoStack_;
+    std::vector<HistoryEntry> redoStack_;
+    std::shared_ptr<QImage> strokeBefore_;
 
     std::vector<Layer> layers_;
     int currentFrame_ = 0;
@@ -492,6 +569,12 @@ MainWindow::MainWindow(QWidget* parent)
     createMenus();
     createToolBar();
     createTimeline();
+
+    playbackTimer_ = new QTimer(this);
+
+    connect(playbackTimer_, &QTimer::timeout,
+            this, &MainWindow::advancePlayback);
+    
     createLayersPanel();
 
     statusBar()->showMessage("Ready | NPT Vision 0.1.0");
@@ -538,14 +621,20 @@ void MainWindow::createMenus()
     connect(exitAction, &QAction::triggered,
             this, &QWidget::close);
 
-    QAction* undoAction = editMenu->addAction("&Undo");
-    undoAction->setShortcut(QKeySequence::Undo);
-    undoAction->setEnabled(false);
+    QAction* undoAction_ = editMenu->addAction("&Undo");
+    undoAction_->setShortcut(QKeySequence::Undo);
+    undoAction_->setEnabled(false);
 
-    QAction* redoAction = editMenu->addAction("&Redo");
-    redoAction->setShortcut(QKeySequence::Redo);
-    redoAction->setEnabled(false);
+    connect(undoAction_, &QAction::triggered,
+            this, &MainWindow::undo);
 
+    QAction* redoAction_ = editMenu->addAction("&Redo");
+    redoAction_->setShortcut(QKeySequence::Redo);
+    redoAction_->setEnabled(false);
+
+    connect(redoAction_, &QAction::triggered,
+            this, &MainWindow::redo);
+    
     QAction* timelineAction = viewMenu->addAction("Timeline");
     timelineAction->setCheckable(true);
     timelineAction->setChecked(true);
@@ -654,6 +743,29 @@ void MainWindow::createToolBar()
         "Color..."
     );
     colorAction->setToolTip("Choose the pencil color");
+
+    playAction_ = toolBar->addAction("&Play");
+    playAction_->setShortcut(Qt::Key_Space);
+
+    connect(playAction_, &QAction::triggered,
+            this, &MainWindow::togglePlayback);
+
+    QAction* stopAction = toolBar->addAction("&Stop");
+
+    connect(stopAction, &QAction::triggered,
+            this, &MainWindow::stopPlayback);
+
+    auto* fpsBox = new QSpinBox(this);
+    fpsBox->setRange(1, 60);
+    fpsBox->setValue(12);
+    fpsBox->setSuffix(" FPS");
+    fpsBox->setToolTip("Animation playback frame rate");
+
+    toolBar->addWidget(fpsBox);
+
+    connect(fpsBox,
+            qOverload<int>(&QSpinBox::valueChanged),
+            this, &MainWindow::setPlaybackFps);
 
     connect(pencil, &QAction::triggered, this, [this]()
     {
@@ -845,6 +957,9 @@ void MainWindow::addFrame()
             .arg(canvasWidget_->currentFrame() + 1),
         3000
     );
+    
+    undoStack_.clear();
+    redoStack_.clear();
 }
 
 void MainWindow::removeFrame()
@@ -866,6 +981,9 @@ void MainWindow::removeFrame()
         QString("Removed Frame %1").arg(removedFrame + 1),
         3000
     );
+
+    undoStack_.clear();
+    redoStack_.clear();
 }
 
 void MainWindow::addLayer()
@@ -925,6 +1043,75 @@ void MainWindow::makeCelIndependent()
         "Selected cel is now independent.",
         3000
     );
+}
+
+void MainWindow::undo()
+{
+    canvasWidget_->undo();
+    updateUndoRedoActions();
+}
+
+void MainWindow::redo()
+{
+    canvasWidget_->redo();
+    updateUndoRedoActions();
+}
+
+void MainWindow::updateUndoRedoActions()
+{
+    undoAction_->setEnabled(canvasWidget_->canUndo());
+    redoAction_->setEnabled(canvasWidget_->canRedo());
+}
+
+void MainWindow::togglePlayback()
+{
+    if (isPlaying_)
+    {
+        playbackTimer_->stop();
+        isPlaying_ = false;
+        playAction_->setText("&Play");
+        return;
+    }
+
+    if (canvasWidget_->frameCount() < 2)
+    {
+        statusBar()->showMessage(
+            "Add at least two frames to play an animation.",
+            3000
+        );
+        return;
+    }
+
+    isPlaying_ = true;
+    playAction_->setText("&Pause");
+    playbackTimer_->start(1000 / playbackFps_);
+}
+
+void MainWindow::stopPlayback()
+{
+    playbackTimer_->stop();
+    isPlaying_ = false;
+    playAction_->setText("&Play");
+    canvasWidget_->selectFrame(0);
+    refreshTimeline();
+}
+
+void MainWindow::advancePlayback()
+{
+    const int nextFrame =
+        (canvasWidget_->currentFrame() + 1)
+        % canvasWidget_->frameCount();
+
+    canvasWidget_->selectFrame(nextFrame);
+    refreshTimeline();
+}
+
+void MainWindow::setPlaybackFps(int fps)
+{
+    playbackFps_ = qBound(1, fps, 60);
+
+    if (isPlaying_)
+        playbackTimer_->start(1000 / playbackFps_);
 }
 
 void MainWindow::createLayersPanel()
