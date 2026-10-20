@@ -639,31 +639,170 @@ void MainWindow::createToolBar()
 
 void MainWindow::createTimeline()
 {
-    auto* timeline = new QTableWidget(2, 12, this);
-    timeline->setObjectName("TimelineTable");
-    timeline->setVerticalHeaderLabels({"Layer 1", "Layer 2"});
-    timeline->verticalHeader()->setDefaultSectionSize(28);
-    timeline->verticalHeader()->setSectionResizeMode(
-        QHeaderView::Fixed
-    );
-    timeline->horizontalHeader()->setSectionResizeMode(
-        QHeaderView::Fixed
-    );
-    timeline->horizontalHeader()->setDefaultSectionSize(48);
-    timeline->setHorizontalHeaderLabels({
-        "1", "2", "3", "4", "5", "6",
-        "7", "8", "9", "10", "11", "12"
-    });
-    timeline->setSelectionMode(QAbstractItemView::SingleSelection);
-    timeline->setSelectionBehavior(QAbstractItemView::SelectItems);
-    timeline->setEditTriggers(QAbstractItemView::NoEditTriggers);
-    timeline->setAlternatingRowColors(true);
+    auto* content = new QWidget(this);
+    auto* layout = new QVBoxLayout(content);
+    layout->setContentsMargins(4, 4, 4, 4);
+    layout->setSpacing(4);
 
-    auto* dock = makeDock("Timeline", timeline, this);
+    auto* controls = new QHBoxLayout();
+
+    auto* addButton = new QPushButton("+ New Frame", content);
+    auto* removeButton = new QPushButton("- Delete Frame", content);
+
+    controls->addWidget(addButton);
+    controls->addWidget(removeButton);
+    controls->addStretch();
+
+    layout->addLayout(controls);
+
+    timelineTable_ = new QTableWidget(1, canvasWidget_->frameCount(), content);
+    timelineTable_->setObjectName("TimelineTable");
+    timelineTable_->setVerticalHeaderLabels({"Artwork"});
+    timelineTable_->verticalHeader()->setDefaultSectionSize(28);
+    timelineTable_->verticalHeader()->setSectionResizeMode(
+        QHeaderView::Fixed
+    );
+    timelineTable_->horizontalHeader()->setSectionResizeMode(
+        QHeaderView::Fixed
+    );
+    timelineTable_->horizontalHeader()->setDefaultSectionSize(48);
+    timelineTable_->setSelectionMode(
+        QAbstractItemView::SingleSelection
+    );
+    timelineTable_->setSelectionBehavior(
+        QAbstractItemView::SelectItems
+    );
+    timelineTable_->setEditTriggers(
+        QAbstractItemView::NoEditTriggers
+    );
+    timelineTable_->setAlternatingRowColors(false);
+
+    for (int i = 0; i < canvasWidget_->frameCount(); ++i)
+    {
+        auto* item = new QTableWidgetItem(QString::number(i + 1));
+        item->setTextAlignment(Qt::AlignCenter);
+        timelineTable_->setHorizontalHeaderItem(i, item);
+
+        auto* cell = new QTableWidgetItem;
+        cell->setTextAlignment(Qt::AlignCenter);
+        cell->setBackground(QColor("#d4d0c8"));
+        timelineTable_->setItem(0, i, cell);
+    }
+
+    layout->addWidget(timelineTable_);
+
+    auto* dock = makeDock("Timeline", content, this);
     dock->setObjectName("Timeline");
-    dock->setMinimumHeight(140);
-
+    dock->setMinimumHeight(150);
     addDockWidget(Qt::BottomDockWidgetArea, dock);
+
+    connect(
+        timelineTable_,
+        &QTableWidget::currentCellChanged,
+        this,
+        [this](int, int currentColumn, int, int)
+        {
+            if (currentColumn >= 0)
+                selectFrame(currentColumn);
+        }
+    );
+
+    connect(addButton, &QPushButton::clicked,
+            this, &MainWindow::addFrame);
+
+    connect(removeButton, &QPushButton::clicked,
+            this, &MainWindow::removeFrame);
+
+    timelineTable_->setCurrentCell(0, 0);
+    selectFrame(0);
+}
+
+
+void MainWindow::selectFrame(int frameIndex)
+{
+    if (!canvasWidget_->selectFrame(frameIndex))
+        return;
+
+    if (timelineTable_->currentColumn() != frameIndex)
+    {
+        const QSignalBlocker blocker(timelineTable_);
+        timelineTable_->setCurrentCell(0, frameIndex);
+    }
+
+    statusBar()->showMessage(
+        QString("Frame %1 of %2")
+            .arg(frameIndex + 1)
+            .arg(canvasWidget_->frameCount())
+    );
+}
+
+void MainWindow::addFrame()
+{
+    canvasWidget_->addFrame();
+
+    const int index = canvasWidget_->frameCount() - 1;
+
+    {
+        const QSignalBlocker blocker(timelineTable_);
+
+        timelineTable_->insertColumn(index);
+
+        auto* header = new QTableWidgetItem(
+            QString::number(index + 1)
+        );
+        header->setTextAlignment(Qt::AlignCenter);
+        timelineTable_->setHorizontalHeaderItem(index, header);
+
+        auto* cell = new QTableWidgetItem;
+        cell->setTextAlignment(Qt::AlignCenter);
+        cell->setBackground(QColor("#d4d0c8"));
+        timelineTable_->setItem(0, index, cell);
+
+        timelineTable_->setCurrentCell(0, index);
+    }
+
+    selectFrame(index);
+}
+
+void MainWindow::removeFrame()
+{
+    if (canvasWidget_->frameCount() <= 1)
+    {
+        statusBar()->showMessage(
+            "The animation must contain at least one frame."
+        );
+        return;
+    }
+
+    int index = timelineTable_->currentColumn();
+
+    if (index < 0)
+        index = canvasWidget_->currentFrame();
+
+    if (!canvasWidget_->removeFrame(index))
+        return;
+
+    {
+        const QSignalBlocker blocker(timelineTable_);
+        timelineTable_->removeColumn(index);
+
+        // Renumber the remaining frames.
+        for (int i = 0; i < timelineTable_->columnCount(); ++i)
+        {
+            auto* header = timelineTable_->horizontalHeaderItem(i);
+
+            if (header)
+                header->setText(QString::number(i + 1));
+        }
+
+        const int nextIndex = qMin(
+            index, canvasWidget_->frameCount() - 1
+        );
+
+        timelineTable_->setCurrentCell(0, nextIndex);
+    }
+
+    selectFrame(canvasWidget_->currentFrame());
 }
 
 void MainWindow::createLayersPanel()
