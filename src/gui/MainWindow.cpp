@@ -17,6 +17,7 @@
 #include <QListWidget>
 #include <QMenu>
 #include <QPen>
+#include <QRect>
 #include <QPixmap>
 #include <QMenuBar>
 #include <QPainter>
@@ -30,44 +31,73 @@
 #include <QSize>
 #include <QPushButton>
 #include <QSignalBlocker>
+
+#include <memory>
 #include <vector>
 
 class CanvasWidget final : public QWidget
 {
 public:
-    enum class Tool
-    {
-        Pencil,
-        Eraser
-    };
+    enum class Tool { Pencil, Eraser };
 
     static constexpr int DrawingWidth = 640;
     static constexpr int DrawingHeight = 360;
+
+    struct Cel
+    {
+        std::shared_ptr<QImage> image;
+    };
+
+    struct Layer
+    {
+        QString name;
+        std::vector<Cel> cels;
+    };
 
     explicit CanvasWidget(QWidget* parent = nullptr)
         : QWidget(parent)
     {
         setMinimumSize(400, 300);
         setMouseTracking(true);
-        frames_.push_back(makeBlankFrame());
+        addLayer("Layer 1");
     }
 
     int frameCount() const
     {
-        return static_cast<int>(frames_.size());
+        return layers_.empty()
+            ? 0 : static_cast<int>(layers_[0].cels.size());
     }
 
-    int currentFrame() const
+    int layerCount() const
     {
-        return currentFrame_;
+        return static_cast<int>(layers_.size());
+    }
+
+    int currentFrame() const { return currentFrame_; }
+    int currentLayer() const { return currentLayer_; }
+
+    QString layerName(int index) const
+    {
+        if (index < 0 || index >= layerCount())
+            return {};
+        return layers_[index].name;
     }
 
     bool selectFrame(int index)
     {
         if (index < 0 || index >= frameCount())
             return false;
-
         currentFrame_ = index;
+        drawingInProgress_ = false;
+        update();
+        return true;
+    }
+
+    bool selectLayer(int index)
+    {
+        if (index < 0 || index >= layerCount())
+            return false;
+        currentLayer_ = index;
         drawingInProgress_ = false;
         update();
         return true;
@@ -75,7 +105,9 @@ public:
 
     void addFrame()
     {
-        frames_.push_back(makeBlankFrame());
+        for (auto& layer : layers_)
+            layer.cels.push_back({makeBlankImage()});
+
         currentFrame_ = frameCount() - 1;
         drawingInProgress_ = false;
         update();
@@ -85,11 +117,10 @@ public:
     {
         if (frameCount() <= 1 ||
             index < 0 || index >= frameCount())
-        {
             return false;
-        }
 
-        frames_.erase(frames_.begin() + index);
+        for (auto& layer : layers_)
+            layer.cels.erase(layer.cels.begin() + index);
 
         if (currentFrame_ >= frameCount())
             currentFrame_ = frameCount() - 1;
@@ -101,20 +132,72 @@ public:
         return true;
     }
 
-    void setTool(Tool tool)
+    bool isCelLinked(int layerIndex, int frameIndex) const
     {
-        tool_ = tool;
+        if (layerIndex < 0 || layerIndex >= layerCount() ||
+            frameIndex < 0 || frameIndex >= frameCount())
+            return false;
+
+        return layers_[layerIndex].cels[frameIndex].image.use_count() > 1;
     }
 
-    void setDrawingColor(const QColor& color)
+    void addLayer(const QString& name = {})
     {
-        color_ = color;
+        Layer layer;
+        layer.name = name.isEmpty()
+            ? QString("Layer %1").arg(layerCount() + 1)
+            : name;
+
+        for (int i = 0; i < qMax(1, frameCount()); ++i)
+            layer.cels.push_back({makeBlankImage()});
+
+        layers_.push_back(std::move(layer));
+        currentLayer_ = layerCount() - 1;
+        update();
     }
 
-    QColor drawingColor() const
+    bool removeLayer(int index)
     {
-        return color_;
+        if (layerCount() <= 1 ||
+            index < 0 || index >= layerCount())
+            return false;
+
+        layers_.erase(layers_.begin() + index);
+
+        if (currentLayer_ >= layerCount())
+            currentLayer_ = layerCount() - 1;
+        else if (currentLayer_ > index)
+            --currentLayer_;
+
+        update();
+        return true;
     }
+
+    bool linkCurrentCelToPrevious()
+    {
+        if (currentFrame_ <= 0)
+            return false;
+
+        auto& cels = layers_[currentLayer_].cels;
+        cels[currentFrame_].image = cels[currentFrame_ - 1].image;
+        update();
+        return true;
+    }
+
+    bool makeCurrentCelIndependent()
+    {
+        auto& image = layers_[currentLayer_].cels[currentFrame_].image;
+        if (!image)
+            return false;
+
+        image = std::make_shared<QImage>(*image);
+        update();
+        return true;
+    }
+
+    void setTool(Tool tool) { tool_ = tool; }
+    void setDrawingColor(const QColor& color) { color_ = color; }
+    QColor drawingColor() const { return color_; }
 
 protected:
     void paintEvent(QPaintEvent*) override
@@ -132,26 +215,26 @@ protected:
         painter.setClipRect(canvas);
         painter.setPen(QPen(QColor("#e4e4e4"), 1));
 
-        constexpr int gridSize = 24;
-
-        for (int x = canvas.left() + gridSize;
-             x < canvas.right(); x += gridSize)
-        {
+        for (int x = canvas.left() + 24; x < canvas.right(); x += 24)
             painter.drawLine(x, canvas.top(), x, canvas.bottom());
-        }
 
-        for (int y = canvas.top() + gridSize;
-             y < canvas.bottom(); y += gridSize)
-        {
+        for (int y = canvas.top() + 24; y < canvas.bottom(); y += 24)
             painter.drawLine(canvas.left(), y, canvas.right(), y);
-        }
 
         painter.restore();
 
-        painter.setRenderHint(
-            QPainter::SmoothPixmapTransform, false
-        );
-        painter.drawImage(canvas, frames_[currentFrame_]);
+        // Composite layers from bottom to top.
+        painter.setRenderHint(QPainter::SmoothPixmapTransform, false);
+        for (const auto& layer : layers_)
+        {
+            if (currentFrame_ < static_cast<int>(layer.cels.size()) &&
+                layer.cels[currentFrame_].image)
+            {
+                painter.drawImage(
+                    canvas, *layer.cels[currentFrame_].image
+                );
+            }
+        }
 
         painter.setPen(QPen(QColor("#808080"), 1));
         painter.drawRect(canvas);
@@ -166,12 +249,9 @@ protected:
         if (!canvas.contains(event->position().toPoint()))
             return;
 
-        const QPoint point =
-            toDrawingPoint(event->position().toPoint());
-
-        lastPoint_ = point;
+        lastPoint_ = toDrawingPoint(event->position().toPoint());
         drawingInProgress_ = true;
-        drawTo(point);
+        drawTo(lastPoint_);
         update();
     }
 
@@ -179,14 +259,9 @@ protected:
     {
         if (!drawingInProgress_ ||
             !(event->buttons() & Qt::LeftButton))
-        {
             return;
-        }
 
-        const QPoint point =
-            toDrawingPoint(event->position().toPoint());
-
-        drawTo(point);
+        drawTo(toDrawingPoint(event->position().toPoint()));
         update();
     }
 
@@ -197,93 +272,75 @@ protected:
     }
 
 private:
-    static QImage makeBlankFrame()
+    static std::shared_ptr<QImage> makeBlankImage()
     {
-        QImage image(
-            DrawingWidth,
-            DrawingHeight,
+        auto image = std::make_shared<QImage>(
+            DrawingWidth, DrawingHeight,
             QImage::Format_ARGB32_Premultiplied
         );
-        image.fill(Qt::transparent);
+        image->fill(Qt::transparent);
         return image;
-    }
-
-    QImage& currentImage()
-    {
-        return frames_[currentFrame_];
     }
 
     QRect canvasRect() const
     {
         const int w = qMin(DrawingWidth, width() - 48);
         const int h = qMin(DrawingHeight, height() - 48);
-
         if (w <= 0 || h <= 0)
             return {};
 
-        return QRect(
-            (width() - w) / 2,
-            (height() - h) / 2,
-            w,
-            h
-        );
+        return QRect((width() - w) / 2, (height() - h) / 2, w, h);
     }
 
     QPoint toDrawingPoint(const QPoint& point) const
     {
         const QRect canvas = canvasRect();
-
         if (canvas.isEmpty())
-            return QPoint(-1, -1);
+            return {-1, -1};
 
-        return QPoint(
-            (point.x() - canvas.left()) * DrawingWidth
-                / canvas.width(),
-            (point.y() - canvas.top()) * DrawingHeight
-                / canvas.height()
-        );
+        return {
+            (point.x() - canvas.left()) * DrawingWidth / canvas.width(),
+            (point.y() - canvas.top()) * DrawingHeight / canvas.height()
+        };
     }
 
     void drawTo(const QPoint& point)
     {
         const QRect bounds(0, 0, DrawingWidth, DrawingHeight);
-
         if (!bounds.contains(point))
         {
             lastPoint_ = point;
             return;
         }
 
-        QPainter painter(&currentImage());
+        // Copy-on-write: preserve linked drawings if a cel is edited.
+        auto& image = layers_[currentLayer_].cels[currentFrame_].image;
+        if (!image.unique())
+            image = std::make_shared<QImage>(*image);
+
+        QPainter painter(image.get());
         painter.setRenderHint(QPainter::Antialiasing, false);
 
         if (tool_ == Tool::Eraser)
         {
-            painter.setCompositionMode(
-                QPainter::CompositionMode_Clear
-            );
-            painter.setPen(QPen(
-                Qt::transparent, 12, Qt::SolidLine,
-                Qt::RoundCap, Qt::RoundJoin
-            ));
+            painter.setCompositionMode(QPainter::CompositionMode_Clear);
+            painter.setPen(QPen(Qt::transparent, 12, Qt::SolidLine,
+                                Qt::RoundCap, Qt::RoundJoin));
         }
         else
         {
-            painter.setCompositionMode(
-                QPainter::CompositionMode_SourceOver
-            );
-            painter.setPen(QPen(
-                color_, 3, Qt::SolidLine,
-                Qt::RoundCap, Qt::RoundJoin
-            ));
+            painter.setCompositionMode(QPainter::CompositionMode_SourceOver);
+            painter.setPen(QPen(color_, 3, Qt::SolidLine,
+                                Qt::RoundCap, Qt::RoundJoin));
         }
 
         painter.drawLine(lastPoint_, point);
         lastPoint_ = point;
     }
 
-    std::vector<QImage> frames_;
+    std::vector<Layer> layers_;
     int currentFrame_ = 0;
+    int currentLayer_ = 0;
 
     QColor color_ = Qt::black;
     Tool tool_ = Tool::Pencil;
@@ -637,131 +694,153 @@ void MainWindow::createToolBar()
     addToolBar(Qt::LeftToolBarArea, toolbar);
 }
 
+
 void MainWindow::createTimeline()
 {
     auto* content = new QWidget(this);
     auto* layout = new QVBoxLayout(content);
     layout->setContentsMargins(4, 4, 4, 4);
-    layout->setSpacing(4);
 
     auto* controls = new QHBoxLayout();
-
-    auto* addButton = new QPushButton("+ New Frame", content);
-    auto* removeButton = new QPushButton("- Delete Frame", content);
+    auto* addButton = new QPushButton("+ Frame", content);
+    auto* removeButton = new QPushButton("- Frame", content);
+    auto* linkButton = new QPushButton("Link Previous", content);
+    auto* independentButton =
+        new QPushButton("Make Independent", content);
 
     controls->addWidget(addButton);
     controls->addWidget(removeButton);
-    controls->addStretch();
-
+    controls->addWidget(linkButton);
+    controls->addWidget(independentButton);
     layout->addLayout(controls);
 
-    timelineTable_ = new QTableWidget(1, canvasWidget_->frameCount(), content);
+    timelineTable_ = new QTableWidget(content);
     timelineTable_->setObjectName("TimelineTable");
-    timelineTable_->setVerticalHeaderLabels({"Artwork"});
+    timelineTable_->setSelectionMode(QAbstractItemView::SingleSelection);
+    timelineTable_->setSelectionBehavior(QAbstractItemView::SelectItems);
+    timelineTable_->setEditTriggers(QAbstractItemView::NoEditTriggers);
     timelineTable_->verticalHeader()->setDefaultSectionSize(28);
-    timelineTable_->verticalHeader()->setSectionResizeMode(
-        QHeaderView::Fixed
-    );
-    timelineTable_->horizontalHeader()->setSectionResizeMode(
-        QHeaderView::Fixed
-    );
+    timelineTable_->verticalHeader()->setSectionResizeMode(QHeaderView::Fixed);
+    timelineTable_->horizontalHeader()->setSectionResizeMode(QHeaderView::Fixed);
     timelineTable_->horizontalHeader()->setDefaultSectionSize(48);
-    timelineTable_->setSelectionMode(
-        QAbstractItemView::SingleSelection
-    );
-    timelineTable_->setSelectionBehavior(
-        QAbstractItemView::SelectItems
-    );
-    timelineTable_->setEditTriggers(
-        QAbstractItemView::NoEditTriggers
-    );
-    timelineTable_->setAlternatingRowColors(false);
-
-    for (int i = 0; i < canvasWidget_->frameCount(); ++i)
-    {
-        auto* item = new QTableWidgetItem(QString::number(i + 1));
-        item->setTextAlignment(Qt::AlignCenter);
-        timelineTable_->setHorizontalHeaderItem(i, item);
-
-        auto* cell = new QTableWidgetItem;
-        cell->setTextAlignment(Qt::AlignCenter);
-        cell->setBackground(QColor("#d4d0c8"));
-        timelineTable_->setItem(0, i, cell);
-    }
 
     layout->addWidget(timelineTable_);
 
     auto* dock = makeDock("Timeline", content, this);
     dock->setObjectName("Timeline");
-    dock->setMinimumHeight(150);
+    dock->setMinimumHeight(180);
     addDockWidget(Qt::BottomDockWidgetArea, dock);
-
-    connect(
-        timelineTable_,
-        &QTableWidget::currentCellChanged,
-        this,
-        [this](int, int currentColumn, int, int)
-        {
-            if (currentColumn >= 0)
-                selectFrame(currentColumn);
-        }
-    );
 
     connect(addButton, &QPushButton::clicked,
             this, &MainWindow::addFrame);
-
     connect(removeButton, &QPushButton::clicked,
             this, &MainWindow::removeFrame);
+    connect(linkButton, &QPushButton::clicked,
+            this, &MainWindow::linkPreviousCel);
+    connect(independentButton, &QPushButton::clicked,
+            this, &MainWindow::makeCelIndependent);
 
-    timelineTable_->setCurrentCell(0, 0);
-    selectFrame(0);
+    connect(timelineTable_, &QTableWidget::currentCellChanged,
+            this, [this](int row, int column, int, int)
+    {
+        if (row < 0 || column < 0)
+            return;
+
+        canvasWidget_->selectLayer(row);
+        canvasWidget_->selectFrame(column);
+
+        if (layersList_ && layersList_->currentRow() != row)
+        {
+            const QSignalBlocker blocker(layersList_);
+            layersList_->setCurrentRow(row);
+        }
+
+        statusBar()->showMessage(
+            QString("Layer %1 | Frame %2")
+                .arg(row + 1).arg(column + 1)
+        );
+    });
+
+    refreshTimeline();
 }
 
+void MainWindow::refreshTimeline()
+{
+    if (!canvasWidget_)
+        return;
+
+    if (timelineTable_)
+    {
+        const QSignalBlocker blocker(timelineTable_);
+
+        timelineTable_->clear();
+        timelineTable_->setRowCount(canvasWidget_->layerCount());
+        timelineTable_->setColumnCount(canvasWidget_->frameCount());
+
+        for (int row = 0; row < canvasWidget_->layerCount(); ++row)
+        {
+            auto* header = new QTableWidgetItem(
+                canvasWidget_->layerName(row)
+            );
+            timelineTable_->setVerticalHeaderItem(row, header);
+
+            for (int column = 0;
+                 column < canvasWidget_->frameCount(); ++column)
+            {
+                auto* cell = new QTableWidgetItem;
+                cell->setTextAlignment(Qt::AlignCenter);
+                cell->setBackground(QColor("#d4d0c8"));
+                timelineTable_->setItem(row, column, cell);
+
+                if (canvasWidget_->isCelLinked(row, column))
+                    cell->setText("↪");
+                else if (row == canvasWidget_->currentLayer() &&
+                         column == canvasWidget_->currentFrame())
+                    cell->setText("●");
+            }
+        }
+
+        for (int column = 0;
+             column < canvasWidget_->frameCount(); ++column)
+        {
+            timelineTable_->setHorizontalHeaderItem(
+                column,
+                new QTableWidgetItem(QString::number(column + 1))
+            );
+        }
+
+        timelineTable_->setCurrentCell(
+            canvasWidget_->currentLayer(),
+            canvasWidget_->currentFrame()
+        );
+    }
+
+    if (layersList_)
+    {
+        const QSignalBlocker blocker(layersList_);
+        layersList_->clear();
+
+        for (int row = 0; row < canvasWidget_->layerCount(); ++row)
+            layersList_->addItem(canvasWidget_->layerName(row));
+
+        layersList_->setCurrentRow(canvasWidget_->currentLayer());
+    }
+
+    canvasWidget_->update();
+}
 
 void MainWindow::selectFrame(int frameIndex)
 {
     if (!canvasWidget_->selectFrame(frameIndex))
         return;
 
-    if (timelineTable_->currentColumn() != frameIndex)
-    {
-        const QSignalBlocker blocker(timelineTable_);
-        timelineTable_->setCurrentCell(0, frameIndex);
-    }
-
-    statusBar()->showMessage(
-        QString("Frame %1 of %2")
-            .arg(frameIndex + 1)
-            .arg(canvasWidget_->frameCount())
-    );
+    refreshTimeline();
 }
 
 void MainWindow::addFrame()
 {
     canvasWidget_->addFrame();
-
-    const int index = canvasWidget_->frameCount() - 1;
-
-    {
-        const QSignalBlocker blocker(timelineTable_);
-
-        timelineTable_->insertColumn(index);
-
-        auto* header = new QTableWidgetItem(
-            QString::number(index + 1)
-        );
-        header->setTextAlignment(Qt::AlignCenter);
-        timelineTable_->setHorizontalHeaderItem(index, header);
-
-        auto* cell = new QTableWidgetItem;
-        cell->setTextAlignment(Qt::AlignCenter);
-        cell->setBackground(QColor("#d4d0c8"));
-        timelineTable_->setItem(0, index, cell);
-
-        timelineTable_->setCurrentCell(0, index);
-    }
-
-    selectFrame(index);
+    refreshTimeline();
 }
 
 void MainWindow::removeFrame()
@@ -769,51 +848,118 @@ void MainWindow::removeFrame()
     if (canvasWidget_->frameCount() <= 1)
     {
         statusBar()->showMessage(
-            "The animation must contain at least one frame."
+            "At least one frame must remain."
         );
         return;
     }
 
-    int index = timelineTable_->currentColumn();
-
-    if (index < 0)
-        index = canvasWidget_->currentFrame();
-
-    if (!canvasWidget_->removeFrame(index))
+    if (!canvasWidget_->removeFrame(canvasWidget_->currentFrame()))
         return;
 
+    refreshTimeline();
+}
+
+void MainWindow::addLayer()
+{
+    canvasWidget_->addLayer();
+    refreshTimeline();
+}
+
+void MainWindow::removeLayer()
+{
+    if (canvasWidget_->layerCount() <= 1)
     {
-        const QSignalBlocker blocker(timelineTable_);
-        timelineTable_->removeColumn(index);
-
-        // Renumber the remaining frames.
-        for (int i = 0; i < timelineTable_->columnCount(); ++i)
-        {
-            auto* header = timelineTable_->horizontalHeaderItem(i);
-
-            if (header)
-                header->setText(QString::number(i + 1));
-        }
-
-        const int nextIndex = qMin(
-            index, canvasWidget_->frameCount() - 1
+        statusBar()->showMessage(
+            "At least one layer must remain."
         );
-
-        timelineTable_->setCurrentCell(0, nextIndex);
+        return;
     }
 
-    selectFrame(canvasWidget_->currentFrame());
+    if (!canvasWidget_->removeLayer(canvasWidget_->currentLayer()))
+        return;
+
+    refreshTimeline();
+}
+
+void MainWindow::selectLayer(int layerIndex)
+{
+    if (canvasWidget_->selectLayer(layerIndex))
+        refreshTimeline();
+}
+
+void MainWindow::linkPreviousCel()
+{
+    if (!canvasWidget_->linkCurrentCelToPrevious())
+    {
+        statusBar()->showMessage(
+            "Select a frame after Frame 1 to link it to the previous frame."
+        );
+        return;
+    }
+
+    refreshTimeline();
+    statusBar()->showMessage("Cel linked to the previous frame.");
+}
+
+void MainWindow::makeCelIndependent()
+{
+    if (!canvasWidget_->makeCurrentCelIndependent())
+        return;
+
+    refreshTimeline();
+    statusBar()->showMessage("Cel is now independent.");
 }
 
 void MainWindow::createLayersPanel()
 {
-    auto* layers = new QListWidget(this);
-    layers->addItem("Layer 1");
-    layers->addItem("Layer 2");
-    layers->setCurrentRow(0);
+    auto* content = new QWidget(this);
+    auto* layout = new QVBoxLayout(content);
+    layout->setContentsMargins(4, 4, 4, 4);
 
-    auto* dock = makeDock("Layers", layers, this);
+    layersList_ = new QListWidget(content);
+    layersList_->setObjectName("LayersList");
+    layout->addWidget(layersList_);
+
+    auto* buttons = new QHBoxLayout();
+    auto* addButton = new QPushButton("+", content);
+    auto* removeButton = new QPushButton("-", content);
+
+    addButton->setToolTip("Add layer");
+    removeButton->setToolTip("Remove selected layer");
+
+    buttons->addWidget(addButton);
+    buttons->addWidget(removeButton);
+    layout->addLayout(buttons);
+
+    auto* dock = makeDock("Layers", content, this);
     dock->setObjectName("Layers");
-
+    dock->setMinimumWidth(180);
     addDockWidget(Qt::RightDockWidgetArea, dock);
+
+    connect(addButton, &QPushButton::clicked,
+            this, &MainWindow::addLayer);
+    connect(removeButton, &QPushButton::clicked,
+            this, &MainWindow::removeLayer);
+
+    connect(layersList_, &QListWidget::currentRowChanged,
+            this, [this](int row)
+    {
+        if (row < 0)
+            return;
+
+        canvasWidget_->selectLayer(row);
+
+        if (timelineTable_ &&
+            timelineTable_->currentRow() != row)
+        {
+            const QSignalBlocker blocker(timelineTable_);
+            timelineTable_->setCurrentCell(
+                row, canvasWidget_->currentFrame()
+            );
+        }
+
+        canvasWidget_->update();
+    });
+
+    refreshTimeline();
 }
