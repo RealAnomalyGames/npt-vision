@@ -38,8 +38,6 @@
 
 class CanvasWidget final : public QWidget
 {
-    Q_OBJECT
-
 public:
     enum class Tool { Pencil, Eraser };
 
@@ -350,10 +348,6 @@ protected:
         update();
     }
 
-signals:
-    void historyChanged();
-}
-
 private:
     static std::shared_ptr<QImage> makeBlankImage()
     {
@@ -428,9 +422,6 @@ private:
         std::shared_ptr<QImage> before;
         std::shared_ptr<QImage> after;
     };
-
-    connect(canvasWidget_, &CanvasWidget::historyChanged,
-        this, &MainWindow::updateUndoRedoActions);
 
     std::vector<HistoryEntry> undoStack_;
     std::vector<HistoryEntry> redoStack_;
@@ -1067,12 +1058,14 @@ void MainWindow::makeCelIndependent()
 void MainWindow::undo()
 {
     canvasWidget_->undo();
+    refreshTimeline();
     updateUndoRedoActions();
 }
 
 void MainWindow::redo()
 {
     canvasWidget_->redo();
+    refreshTimeline();
     updateUndoRedoActions();
 }
 
@@ -1186,5 +1179,3 @@ void MainWindow::createLayersPanel()
 
     refreshTimeline();
 }
-
-#include "MainWindow.moc"
