@@ -1185,3 +1185,5 @@ void MainWindow::createLayersPanel()
 
     refreshTimeline();
 }
+
+#include "MainWindow.moc"
