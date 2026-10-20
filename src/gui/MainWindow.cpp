@@ -38,6 +38,8 @@
 
 class CanvasWidget final : public QWidget
 {
+    Q_OBJECT
+
 public:
     enum class Tool { Pencil, Eraser };
 
@@ -232,6 +234,13 @@ public:
         update();
     }
 
+    void clearHistory()
+    {
+        undoStack_.clear();
+        redoStack_.clear();
+        strokeBefore_.reset();
+    }
+
     void setTool(Tool tool) { tool_ = tool; }
     void setDrawingColor(const QColor& color) { color_ = color; }
     QColor drawingColor() const { return color_; }
@@ -285,12 +294,28 @@ protected:
         const QRect canvas = canvasRect();
         if (!canvas.contains(event->position().toPoint()))
             return;
-
+    
         lastPoint_ = toDrawingPoint(event->position().toPoint());
-        drawingInProgress_ = true;
-        
-        strokeBefore_ =
+
+        auto& image =
             layers_[currentLayer_].cels[currentFrame_].image;
+
+        // Preserve the exact original pointer, including held cels.
+        strokeBefore_ = image;
+
+        drawingInProgress_ = true;
+
+        drawTo(lastPoint_);
+        update();
+    }
+
+    void mouseReleaseEvent(QMouseEvent* event) override
+    {
+        if (event->button() != Qt::LeftButton ||
+            !drawingInProgress_)
+            return;
+    
+        drawingInProgress_ = false;
 
         if (strokeBefore_)
         {
@@ -311,8 +336,7 @@ protected:
 
             strokeBefore_.reset();
         }
-        
-        drawTo(lastPoint_);
+
         update();
     }
 
@@ -324,12 +348,6 @@ protected:
 
         drawTo(toDrawingPoint(event->position().toPoint()));
         update();
-    }
-
-    void mouseReleaseEvent(QMouseEvent* event) override
-    {
-        if (event->button() == Qt::LeftButton)
-            drawingInProgress_ = false;
     }
 
 private:
@@ -406,6 +424,12 @@ private:
         std::shared_ptr<QImage> before;
         std::shared_ptr<QImage> after;
     };
+
+    connect(canvasWidget_, &CanvasWidget::historyChanged,
+        this, &MainWindow::updateUndoRedoActions);
+
+    signals:
+        void historyChanged();
 
     std::vector<HistoryEntry> undoStack_;
     std::vector<HistoryEntry> redoStack_;
@@ -621,14 +645,14 @@ void MainWindow::createMenus()
     connect(exitAction, &QAction::triggered,
             this, &QWidget::close);
 
-    QAction* undoAction_ = editMenu->addAction("&Undo");
+    undoAction_ = editMenu->addAction("&Undo");
     undoAction_->setShortcut(QKeySequence::Undo);
     undoAction_->setEnabled(false);
 
     connect(undoAction_, &QAction::triggered,
             this, &MainWindow::undo);
 
-    QAction* redoAction_ = editMenu->addAction("&Redo");
+    redoAction_ = editMenu->addAction("&Redo");
     redoAction_->setShortcut(QKeySequence::Redo);
     redoAction_->setEnabled(false);
 
@@ -744,13 +768,13 @@ void MainWindow::createToolBar()
     );
     colorAction->setToolTip("Choose the pencil color");
 
-    playAction_ = toolBar->addAction("&Play");
-    playAction_->setShortcut(Qt::Key_Space);
+    playAction_ = toolbar->addAction("&Play");
+    playAction_->setShortcut(QKeySequence(Qt::Key_Space));
 
     connect(playAction_, &QAction::triggered,
             this, &MainWindow::togglePlayback);
 
-    QAction* stopAction = toolBar->addAction("&Stop");
+    QAction* stopAction = toolbar->addAction("&Stop");
 
     connect(stopAction, &QAction::triggered,
             this, &MainWindow::stopPlayback);
@@ -761,7 +785,7 @@ void MainWindow::createToolBar()
     fpsBox->setSuffix(" FPS");
     fpsBox->setToolTip("Animation playback frame rate");
 
-    toolBar->addWidget(fpsBox);
+    toolbar->addWidget(fpsBox);
 
     connect(fpsBox,
             qOverload<int>(&QSpinBox::valueChanged),
@@ -957,9 +981,6 @@ void MainWindow::addFrame()
             .arg(canvasWidget_->currentFrame() + 1),
         3000
     );
-    
-    undoStack_.clear();
-    redoStack_.clear();
 }
 
 void MainWindow::removeFrame()
@@ -981,9 +1002,6 @@ void MainWindow::removeFrame()
         QString("Removed Frame %1").arg(removedFrame + 1),
         3000
     );
-
-    undoStack_.clear();
-    redoStack_.clear();
 }
 
 void MainWindow::addLayer()
