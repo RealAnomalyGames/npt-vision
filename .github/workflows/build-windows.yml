@@ -53,6 +53,17 @@ jobs:
 
           windeployqt --release $exe
 
+      - name: Generate SHA-256 checksum
+        shell: pwsh
+        run: |
+          Get-ChildItem -Path "release" -File -Recurse |
+            Where-Object { $_.Extension -in ".zip", ".exe" } |
+            ForEach-Object {
+              $hash = Get-FileHash $_.FullName -Algorithm SHA256
+              "$($hash.Hash.ToLower())  $($_.Name)" |
+                Out-File -FilePath "$($_.FullName).sha256" -Encoding ascii
+            }
+
       - name: Upload Windows build
         uses: actions/upload-artifact@v4
         with:
