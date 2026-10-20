@@ -22,10 +22,15 @@
 #include <QPainter>
 #include <QStatusBar>
 #include <QTableWidget>
+#include <QTableWidgetItem>
 #include <QVBoxLayout>
+#include <QHBoxLayout>
 #include <QWidget>
 #include <QIcon>
 #include <QSize>
+#include <QPushButton>
+#include <QSignalBlocker>
+#include <vector>
 
 class CanvasWidget final : public QWidget
 {
@@ -36,21 +41,69 @@ public:
         Eraser
     };
 
-    explicit CanvasWidget(QWidget* parent = nullptr)
-        : QWidget(parent),
-          drawing_(640, 360, QImage::Format_ARGB32_Premultiplied)
-    {
-        drawing_.fill(Qt::transparent);
+    static constexpr int DrawingWidth = 640;
+    static constexpr int DrawingHeight = 360;
 
+    explicit CanvasWidget(QWidget* parent = nullptr)
+        : QWidget(parent)
+    {
         setMinimumSize(400, 300);
         setMouseTracking(true);
-        setAutoFillBackground(false);
+        frames_.push_back(makeBlankFrame());
+    }
+
+    int frameCount() const
+    {
+        return static_cast<int>(frames_.size());
+    }
+
+    int currentFrame() const
+    {
+        return currentFrame_;
+    }
+
+    bool selectFrame(int index)
+    {
+        if (index < 0 || index >= frameCount())
+            return false;
+
+        currentFrame_ = index;
+        drawingInProgress_ = false;
+        update();
+        return true;
+    }
+
+    void addFrame()
+    {
+        frames_.push_back(makeBlankFrame());
+        currentFrame_ = frameCount() - 1;
+        drawingInProgress_ = false;
+        update();
+    }
+
+    bool removeFrame(int index)
+    {
+        if (frameCount() <= 1 ||
+            index < 0 || index >= frameCount())
+        {
+            return false;
+        }
+
+        frames_.erase(frames_.begin() + index);
+
+        if (currentFrame_ >= frameCount())
+            currentFrame_ = frameCount() - 1;
+        else if (currentFrame_ > index)
+            --currentFrame_;
+
+        drawingInProgress_ = false;
+        update();
+        return true;
     }
 
     void setTool(Tool tool)
     {
         tool_ = tool;
-        update();
     }
 
     void setDrawingColor(const QColor& color)
@@ -70,13 +123,11 @@ protected:
         painter.fillRect(rect(), QColor("#303238"));
 
         const QRect canvas = canvasRect();
-
-        if (canvas.width() <= 0 || canvas.height() <= 0)
+        if (canvas.isEmpty())
             return;
 
         painter.fillRect(canvas, Qt::white);
 
-        // Subtle grid, matching the existing canvas appearance.
         painter.save();
         painter.setClipRect(canvas);
         painter.setPen(QPen(QColor("#e4e4e4"), 1));
@@ -97,9 +148,10 @@ protected:
 
         painter.restore();
 
-        // Draw the artwork over the background grid.
-        painter.setRenderHint(QPainter::SmoothPixmapTransform, false);
-        painter.drawImage(canvas, drawing_);
+        painter.setRenderHint(
+            QPainter::SmoothPixmapTransform, false
+        );
+        painter.drawImage(canvas, frames_[currentFrame_]);
 
         painter.setPen(QPen(QColor("#808080"), 1));
         painter.drawRect(canvas);
@@ -110,15 +162,15 @@ protected:
         if (event->button() != Qt::LeftButton)
             return;
 
-        const QPoint point = toDrawingPoint(event->position().toPoint());
-
-        if (!QRect(QPoint(0, 0), drawing_.size()).contains(point))
+        const QRect canvas = canvasRect();
+        if (!canvas.contains(event->position().toPoint()))
             return;
 
-        drawing_ = drawing_.copy();
+        const QPoint point =
+            toDrawingPoint(event->position().toPoint());
+
         lastPoint_ = point;
         drawingInProgress_ = true;
-
         drawTo(point);
         update();
     }
@@ -131,7 +183,10 @@ protected:
             return;
         }
 
-        drawTo(toDrawingPoint(event->position().toPoint()));
+        const QPoint point =
+            toDrawingPoint(event->position().toPoint());
+
+        drawTo(point);
         update();
     }
 
@@ -142,19 +197,35 @@ protected:
     }
 
 private:
+    static QImage makeBlankFrame()
+    {
+        QImage image(
+            DrawingWidth,
+            DrawingHeight,
+            QImage::Format_ARGB32_Premultiplied
+        );
+        image.fill(Qt::transparent);
+        return image;
+    }
+
+    QImage& currentImage()
+    {
+        return frames_[currentFrame_];
+    }
+
     QRect canvasRect() const
     {
-        const int canvasWidth = qMin(640, width() - 48);
-        const int canvasHeight = qMin(360, height() - 48);
+        const int w = qMin(DrawingWidth, width() - 48);
+        const int h = qMin(DrawingHeight, height() - 48);
 
-        if (canvasWidth <= 0 || canvasHeight <= 0)
+        if (w <= 0 || h <= 0)
             return {};
 
         return QRect(
-            (width() - canvasWidth) / 2,
-            (height() - canvasHeight) / 2,
-            canvasWidth,
-            canvasHeight
+            (width() - w) / 2,
+            (height() - h) / 2,
+            w,
+            h
         );
     }
 
@@ -162,20 +233,20 @@ private:
     {
         const QRect canvas = canvasRect();
 
-        if (canvas.width() <= 0 || canvas.height() <= 0)
+        if (canvas.isEmpty())
             return QPoint(-1, -1);
 
         return QPoint(
-            (point.x() - canvas.left()) * drawing_.width()
+            (point.x() - canvas.left()) * DrawingWidth
                 / canvas.width(),
-            (point.y() - canvas.top()) * drawing_.height()
+            (point.y() - canvas.top()) * DrawingHeight
                 / canvas.height()
         );
     }
 
     void drawTo(const QPoint& point)
     {
-        const QRect bounds(QPoint(0, 0), drawing_.size());
+        const QRect bounds(0, 0, DrawingWidth, DrawingHeight);
 
         if (!bounds.contains(point))
         {
@@ -183,31 +254,37 @@ private:
             return;
         }
 
-        QPainter painter(&drawing_);
+        QPainter painter(&currentImage());
         painter.setRenderHint(QPainter::Antialiasing, false);
 
         if (tool_ == Tool::Eraser)
         {
-            painter.setCompositionMode(QPainter::CompositionMode_Clear);
+            painter.setCompositionMode(
+                QPainter::CompositionMode_Clear
+            );
+            painter.setPen(QPen(
+                Qt::transparent, 12, Qt::SolidLine,
+                Qt::RoundCap, Qt::RoundJoin
+            ));
         }
         else
         {
-            painter.setCompositionMode(QPainter::CompositionMode_SourceOver);
-            painter.setPen(QPen(color_, 3, Qt::SolidLine,
-                                Qt::RoundCap, Qt::RoundJoin));
-        }
-
-        if (tool_ == Tool::Eraser)
-        {
-            painter.setPen(QPen(Qt::transparent, 12, Qt::SolidLine,
-                                Qt::RoundCap, Qt::RoundJoin));
+            painter.setCompositionMode(
+                QPainter::CompositionMode_SourceOver
+            );
+            painter.setPen(QPen(
+                color_, 3, Qt::SolidLine,
+                Qt::RoundCap, Qt::RoundJoin
+            ));
         }
 
         painter.drawLine(lastPoint_, point);
         lastPoint_ = point;
     }
 
-    QImage drawing_;
+    std::vector<QImage> frames_;
+    int currentFrame_ = 0;
+
     QColor color_ = Qt::black;
     Tool tool_ = Tool::Pencil;
     QPoint lastPoint_;
