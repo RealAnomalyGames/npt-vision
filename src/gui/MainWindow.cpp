@@ -351,7 +351,8 @@ protected:
     }
 
 signals:
-        void historyChanged();
+    void historyChanged();
+}
 
 private:
     static std::shared_ptr<QImage> makeBlankImage()
