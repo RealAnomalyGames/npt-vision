@@ -184,15 +184,11 @@ public:
         return true;
     }
 
-    bool makeCurrentCelIndependent()
+    void makeCurrentCelIndependent()
     {
-        auto& image = layers_[currentLayer_].cels[currentFrame_].image;
-        if (!image)
-            return false;
-
-        image = std::make_shared<QImage>(*image);
+        Cel& cel = layers_[currentLayer_].cels[currentFrame_];
+        cel.image = std::make_shared<QImage>(*cel.image);
         update();
-        return true;
     }
 
     void setTool(Tool tool) { tool_ = tool; }
@@ -493,15 +489,15 @@ MainWindow::MainWindow(QWidget* parent)
     toolStatusLabel_ = new QLabel("Tool: Pencil", this);
     statusBar()->addPermanentWidget(toolStatusLabel_);
 
-    createMenus();
-    createToolBar();
-    createTimeline();
-    createLayersPanel();
+    Menus();
+    ToolBar();
+    Timeline();
+    LayersPanel();
 
     statusBar()->showMessage("Ready | NPT Vision 0.1.0");
 }
 
-void MainWindow::createMenus()
+void MainWindow::Menus()
 {
     QMenu* fileMenu = menuBar()->addMenu("&File");
     QMenu* editMenu = menuBar()->addMenu("&Edit");
@@ -566,7 +562,7 @@ void MainWindow::createMenus()
         );
     });
 
-    // The dock widgets are connected after they are created.
+    // The dock widgets are connected after they are d.
     connect(timelineAction, &QAction::triggered, this, [this](bool visible)
     {
         if (QDockWidget* dock = findChild<QDockWidget*>("Timeline"))
@@ -694,7 +690,6 @@ void MainWindow::createToolBar()
     addToolBar(Qt::LeftToolBarArea, toolbar);
 }
 
-
 void MainWindow::createTimeline()
 {
     auto* content = new QWidget(this);
@@ -704,13 +699,16 @@ void MainWindow::createTimeline()
     auto* controls = new QHBoxLayout();
     auto* addButton = new QPushButton("+ Frame", content);
     auto* removeButton = new QPushButton("- Frame", content);
-    auto* linkButton = new QPushButton("Link Previous", content);
+    auto* holdDrawingButton = new QPushButton("Hold Drawing", content);
+    holdDrawingButton->setToolTip(
+        "Hold the previous frame's drawing in the selected cel."
+    );
     auto* independentButton =
         new QPushButton("Make Independent", content);
 
     controls->addWidget(addButton);
     controls->addWidget(removeButton);
-    controls->addWidget(linkButton);
+    controls->addWidget(holdDrawingButton);
     controls->addWidget(independentButton);
     layout->addLayout(controls);
 
@@ -735,7 +733,7 @@ void MainWindow::createTimeline()
             this, &MainWindow::addFrame);
     connect(removeButton, &QPushButton::clicked,
             this, &MainWindow::removeFrame);
-    connect(linkButton, &QPushButton::clicked,
+    connect(holdDrawingButton, &QPushButton::clicked,
             this, &MainWindow::linkPreviousCel);
     connect(independentButton, &QPushButton::clicked,
             this, &MainWindow::makeCelIndependent);
@@ -841,22 +839,33 @@ void MainWindow::addFrame()
 {
     canvasWidget_->addFrame();
     refreshTimeline();
+
+    statusBar()->showMessage(
+        QString("Added Frame %1")
+            .arg(canvasWidget_->currentFrame() + 1),
+        3000
+    );
 }
 
 void MainWindow::removeFrame()
 {
-    if (canvasWidget_->frameCount() <= 1)
-    {
+    if (canvasWidget_->frameCount() <= 1) {
         statusBar()->showMessage(
-            "At least one frame must remain."
+            "At least one frame must remain.",
+            3000
         );
         return;
     }
 
-    if (!canvasWidget_->removeFrame(canvasWidget_->currentFrame()))
-        return;
+    const int removedFrame = canvasWidget_->currentFrame();
 
+    canvasWidget_->removeFrame(removedFrame);
     refreshTimeline();
+
+    statusBar()->showMessage(
+        QString("Removed Frame %1").arg(removedFrame + 1),
+        3000
+    );
 }
 
 void MainWindow::addLayer()
@@ -889,25 +898,33 @@ void MainWindow::selectLayer(int layerIndex)
 
 void MainWindow::linkPreviousCel()
 {
-    if (!canvasWidget_->linkCurrentCelToPrevious())
-    {
+    if (canvasWidget_->currentFrame() == 0) {
         statusBar()->showMessage(
-            "Select a frame after Frame 1 to link it to the previous frame."
+            "The first frame has no previous drawing to hold.",
+            3000
         );
         return;
     }
 
+    canvasWidget_->linkCurrentCelToPrevious();
     refreshTimeline();
-    statusBar()->showMessage("Cel linked to the previous frame.");
+
+    statusBar()->showMessage(
+        QString("Holding drawing from Frame %1")
+            .arg(canvasWidget_->currentFrame()),
+        3000
+    );
 }
 
 void MainWindow::makeCelIndependent()
 {
-    if (!canvasWidget_->makeCurrentCelIndependent())
-        return;
-
+    canvasWidget_->makeCurrentCelIndependent();
     refreshTimeline();
-    statusBar()->showMessage("Cel is now independent.");
+
+    statusBar()->showMessage(
+        "Selected cel is now independent.",
+        3000
+    );
 }
 
 void MainWindow::createLayersPanel()
