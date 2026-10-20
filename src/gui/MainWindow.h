@@ -4,6 +4,7 @@
 
 class QActionGroup;
 class QLabel;
+class QListWidget;
 class QTableWidget;
 class CanvasWidget;
 
@@ -24,8 +25,16 @@ private:
     void removeFrame();
     void selectFrame(int frameIndex);
 
+    void addLayer();
+    void removeLayer();
+    void selectLayer(int layerIndex);
+    void linkPreviousCel();
+    void makeCelIndependent();
+    void refreshTimeline();
+
     CanvasWidget* canvasWidget_ = nullptr;
     QActionGroup* toolGroup_ = nullptr;
     QLabel* toolStatusLabel_ = nullptr;
     QTableWidget* timelineTable_ = nullptr;
+    QListWidget* layersList_ = nullptr;
 };
